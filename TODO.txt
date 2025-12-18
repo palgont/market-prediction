@@ -1,0 +1,4 @@
+
+
+Score Function:
+Compute the average log probability.

@@ -1,4 +1,4 @@
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import seaborn as sns
 
 import numpy as np
@@ -36,29 +36,33 @@ def load_dataset(seed=123, val_size=0, data_dir=DATA_DIR):
 
     train_df = pd.read_csv(train_csv_fpath)
     test_df  = pd.read_csv(test_csv_fpath)
+    
+    # only keep scored rows in test df
+    test_df = test_df[test_df["is_scored"]]
 
     # Choose target
-    TARGET_COL = 'market_forward_excess_returns'   # <- most likely what you want
+    TARGET_COL = 'market_forward_excess_returns'
+    TEST_TARGET_COL = 'lagged_market_forward_excess_returns'
     ID_COL = 'date_id'
 
     # Features = everything except id + target(s)
     DROP_COLS = [ID_COL, TARGET_COL, 'forward_returns', 'risk_free_rate']
+    MORE_COLS = ['is_scored', 'lagged_forward_returns', 'lagged_risk_free_rate', 'lagged_market_forward_excess_returns']
     feature_cols = [c for c in train_df.columns if c not in DROP_COLS]
+    val_cols = [c for c in test_df.columns if c not in DROP_COLS + MORE_COLS]
 
     # Build arrays
     x_train_ND = train_df[feature_cols].to_numpy()
     t_train_N  = train_df[TARGET_COL].to_numpy()
 
-    # Test labels might or might not exist depending on competition setup.
     # If test.csv has no target column, set t_test_N = None
-    x_test_ND = test_df[feature_cols].to_numpy()
-    t_test_N  = test_df[TARGET_COL].to_numpy() if TARGET_COL in test_df.columns else None
+    x_test_ND = test_df[val_cols].to_numpy()
 
-    if val_size == 0:
+    if TEST_TARGET_COL in test_df.columns:
+        t_test_N  = test_df[TEST_TARGET_COL].to_numpy()
         return x_train_ND, t_train_N, x_test_ND, t_test_N
-    else:
-        assert val_size > 0
-        V = int(val_size)
-        x_val_VD, t_val_V = x_train_ND[-V:], t_train_N[-V:]
-        x_train_ND, t_train_N = x_train_ND[:-V], t_train_N[:-V]
-        return x_train_ND, t_train_N, x_val_VD, t_val_V
+    
+    # misiing output column
+    raise KeyError("Missing t_test_N", test_csv_fpath)
+    
+

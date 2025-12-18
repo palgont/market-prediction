@@ -1,0 +1,362 @@
+\documentclass{article}
+
+% Load packages
+\usepackage[final]{neurips_2024}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{graphicx}
+
+\title{Predicting S\&P 500 Excess Returns: Testing Market Efficiency Through Probabilistic Time-Series Modeling}
+
+\author{
+  Jeremiah Longino \\
+   \\
+  \texttt{} \\
+  \And
+  John Castillo \\
+   \\
+  \texttt{} \\
+  \And
+  Palgon Tsering \\
+   \\
+  \texttt{} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+...
+\end{abstract}
+
+\section{Introduction}
+
+This project is a time-series regression task that predicts future excess returns of the S\&P 500 using historical financial indicators and market features. Specifically, we will train a model that, given past market data such as macroeconomic indicators and qualitative signals, will produce a probabilistic forecast of future excess returns while accounting for volatility constraints. Probabilistic modeling is valuable here because financial markets are inherently uncertain and noisy. Rather than producing a single point estimate, it provides a distribution of possible outcomes, enabling risk-aware decision-making and improved volatility management. Essentially, we hope to test the Efficient Market Hypothesis(EMH) to see if the market can be timed and possibly uncover repeatable edges that shouldn’t exist in theory.
+
+% \section{Dataset}
+
+% We utilize the Hull Tactical Market Prediction dataset from Kaggle, which contains approximately 9,000 daily observations of S\&P 500 market behavior. Each observation includes 98 numerical features organized into seven financial categories:
+
+% \begin{itemize}
+% \item \textbf{D Features (D1--D9):} 9 Technical Indicators
+% \item \textbf{E Features (E1--E20):} 20 Economic Indicators
+% \item \textbf{V Features (V1--V15):} 15 Volatility/Variance Signals
+% \item \textbf{S Features (S1--S15):} 15 Sentiment Signals
+% \item \textbf{M Features (M1--M20):} 20 Market/Momentum Indicators
+% \item \textbf{T Features (T1--T10):} 10 Trend/Timing Signals
+% \item \textbf{P Features (P1--P9):} 9 Proprietary Hull Tactical Signals
+% \end{itemize}
+
+% The data is formatted in CSV with consistent numeric column names and requires minimal preprocessing, making it well-suited for probabilistic regression modeling.
+
+
+\section{Data and Analysis Plan}
+
+\subsection{Dataset Description}
+
+We use the \textit{Hull Tactical Market Prediction Dataset} from Kaggle 
+\cite{hulltactical2020}. The dataset contains approximately $T \approx 9000$ 
+daily observations of U.S.\ equity market behavior. Each daily observation is represented 
+as a feature vector in $\mathbb{R}^{98}$, supplemented with several financial 
+target variables (forward returns, excess returns, and risk-free rates).
+
+The 98 predictive features are grouped into seven meaningful financial categories:
+
+\begin{itemize}
+    \item \textbf{Technical Indicators (D1--D9):} Discrete signals taking values in $\{-1,0,1\}$.
+    \item \textbf{Economic Indicators (E1--E20):} Continuous variables, typically $-3 < x < 3$ with six decimals.
+    \item \textbf{Interest Rate Features (I1--I9):} Real-valued, roughly $-4 < x < 4$.
+    \item \textbf{Volatility Signals (V1--V13):} Real-valued volatility and variance measures ($-4 < x < 4$).
+    \item \textbf{Sentiment Indicators (S1--S12):} Continuous sentiment scores ($-4 < x < 4$).
+    \item \textbf{Market / Momentum Indicators (M1--M18):} Momentum-based features ($-4 < x < 4$).
+    \item \textbf{Proprietary Hull Signals (P1--P13):} A mix of macro and market-derived indicators.
+\end{itemize}
+
+Additional fields include dummy variables, the federal funds rate, 
+the one-day S\&P 500 forward return $r_{t+1}$, and the 
+\emph{market forward excess return}, defined as
+\[
+r^{\text{excess}}_{t+1} 
+= r_{t+1} - \hat{\mu}_t^{(5\text{yr})},
+\]
+where $\hat{\mu}_t^{(5\text{yr})}$ is the five-year rolling mean of $r_{t+1}$.
+
+Extreme residuals are capped using a median absolute deviation (MAD) cutoff of 4.
+
+Each observation is therefore a pair 
+\[
+(x_t, y_t), \qquad x_t \in \mathbb{R}^{98}, \quad y_t = r_{t+1} \in \mathbb{R},
+\]
+and our full dataset is 
+\[
+\mathcal{D} = \{(x_t, y_t)\}_{t=1}^T.
+\]
+
+\subsection{Missingness and Preprocessing}
+
+Although the CSV file is well-structured and numerically consistent, the dataset exhibits 
+a considerable amount of time-dependent missingness. Early historical periods contain 
+significant gaps, particularly among the macroeconomic (E), sentiment (S), and 
+volatility (V) categories. More recent decades are considerably more complete.
+
+
+\begin{figure}[h]
+    \includegraphics[width=0.95\linewidth]{image.png}
+    \caption{Missing Values Heatmap for Training Data.  
+    Early periods exhibit substantial missingness, especially in macro and sentiment features.
+     Later years are significantly more complete. This image was taken from: \href{https://www.kaggle.com/competitions/hull-tactical-market-prediction/discussion/610981}{\emph{The Hull Tactical competition exploratory data analysis}}}.
+    \label{fig:missing_heatmap}
+\end{figure}
+
+This structure motivates time-aware preprocessing rather than global imputation.
+
+\paragraph{Initial preprocessing (Upgrade 1).}
+We remove heavily missing early rows via slicing, retaining the more reliable period.
+
+\paragraph{Hypothesis-Driven Upgrade 2 (Window-based feature construction).}
+Instead of discarding data, we construct window-level summary features using the most 
+recent $W$ observations. 
+
+\textbf{Hypothesis:}  
+Window-based aggregation will outperform slicing because it leverages 
+partially observed history and captures temporal heterogeneity, 
+especially in periods with high missingness.
+
+\subsection{Key Dataset Properties Relevant to Our Hypothesis}
+
+\begin{itemize}
+    \item \textbf{High missingness in early years} (Figure \ref{fig:missing_heatmap}), motivating window-based features.
+    \item \textbf{High dimensionality} ($98$ features), supporting probabilistic regression with regularization.
+\end{itemize}
+
+\subsection{Training and Testing data set}
+
+Our data has a testing and data that is provided. The testing set has 11 columns of testing data, where as the training set has over 9000 rows of data.
+\subsection{Citation}
+
+\begingroup
+\renewcommand{\section}[2]{}
+\begin{thebibliography}{1}
+
+\bibitem{hulltactical2020}
+Hull Tactical Asset Allocation.
+\newblock \textit{Hull Tactical Market Prediction Dataset}.
+\newblock Kaggle, 2025. \url{https://www.kaggle.com/competitions/hull-tactical-market-prediction/overview}
+
+\end{thebibliography}
+\endgroup
+
+
+
+
+\section{Baseline Method}
+
+As a baseline method, we’ll be using the Posterior Predictive Estimator(PPE) to predict a time series point $r_{N+1}$, where $r_N$ represents market forward excess returns for the Nth time point. We chose the Posterior Predictive because market data is noisy and non-deterministic which the PPE is appropriate for as it averages over all uncertainty rather than a point estimation. In addition, we will be applying Gaussian assumptions as it encompasses the EMH by assuming any excess market return is caused by random noise and not an inefficient market. There is no optimization of the PPE as it is a marginalization of all possible parameter values and the estimation objective is to see that it performs especially well in shorter time frames where there is consistency with the observed data and tested groups.
+
+   $p(r_* | x_*,{x_n, r_n}_{n=1}^N , \alpha, \beta) = \mathcal{N}(r_* | m_N^T \phi(x_*), \sigma_N^2(x_*)),$ where $r_*$ is the target  market forward excess returns
+
+    We are given $N$ input/output pairs: $\{x_{in}, r_n\}_{n=1}^N,$ where $x_{i1}$ is a vector of $i$ values, each a input variable for time point $n$
+
+\subsection{Implementation Plan for Baseline}
+Our baseline model is implemented using the \texttt{LinearRegressionPosteriorPredictiveEstimator} 
+provided in CP2, which performs Bayesian linear regression with a Gaussian prior on the weights and 
+a Gaussian likelihood on the target variable. We adapt this estimator to our setting by replacing the 
+CP2 one-dimensional input with the full 98-dimensional feature vector from the Hull dataset. The 
+baseline thus reuses the core posterior-updating routines in 
+\texttt{LinearRegressionPosteriorPredictiveEstimator} (for example, the Cholesky-based update of the 
+posterior precision and mean) while modifying only the feature transformer so that it passes the raw 
+standardized features directly as $\phi(x_t)$ instead of polynomial expansions.
+
+Training proceeds by calling \texttt{fit}, which computes the posterior distribution 
+$p(w \mid X, y)$ using Bishop PRML Eq.~3.58--3.59 as implemented in CP2. Predictions are made using 
+\texttt{predict} and \texttt{predict\_variance}, which evaluate the posterior predictive distribution 
+for each input: a Normal distribution with mean $\phi(x_t)^\top \mu$ and variance given by the sum of 
+observation noise and parameter uncertainty. This allows us to evaluate predictive log likelihood on 
+validation and test sets using the built-in \texttt{score} method, which computes the average log 
+probability of observed returns under the posterior predictive model.
+
+We implement preprocessing (CSV loading, chronological splitting, and feature standardization(rescaling)) ourselves, 
+but all Bayesian regression computations rely directly on the CP2 functions. No MCMC or numerical 
+integration is required for the baseline because the posterior predictive distribution is available in 
+closed form. Hyperparameters $(\alpha, \beta)$, which control prior precision and noise precision, will 
+initially be set to reasonable constants ($\alpha = 1$, $\beta$ chosen based on return variance) 
+and optionally tuned using grid search following the CP2 examples in 
+\texttt{run\_grid\_search\_\_5fold\_heldout\_score.py} or the evidence-based search in 
+\texttt{run\_grid\_search\_\_evidence.py}.
+
+
+
+% \subsection{Implementation Plan}
+
+% Our baseline implementation closely follows the CP3 code structure provided in class, 
+% adapting it from the bird-density regression task to our financial time-series setting.
+
+% \paragraph{Data loading and preprocessing.}
+% We will write a custom data loader in Python that reads the Hull Tactical CSV files 
+% using \texttt{pandas} and constructs the design matrices for train, validation, 
+% and test splits. All 98 input features will be standardized (zero mean, unit variance) 
+% using \texttt{scikit-learn}'s \texttt{StandardScaler}, while the target variable 
+% will be the market forward excess return $y_t$. Time ordering will be preserved so that 
+% the train/validation/test sets respect chronological order.
+
+% \paragraph{Feature representation.}
+% Unlike CP3, which uses a one-dimensional SqExpPolyTransform for bird-count data, 
+% we will treat the 98-dimensional input vector $x_t$ directly as our feature vector 
+% $\phi(x_t) \in \mathbb{R}^{M}$ with $M = 98$ (plus an added bias term). 
+% We will implement this feature map ourselves as a simple concatenation of a bias term 
+% and standardized raw features, rather than using the one-dimensional 
+% \texttt{SqExpPolyTransform} class from CP3.:contentReference[oaicite:0]{index=0}
+
+% \paragraph{Model and log joint density.}
+% We will implement the log joint density
+% \[
+% \log p(\mathbf{y}, \mathbf{w}, \mathbf{v} \mid \mathbf{X})
+% \]
+% following the CP3 pattern in \texttt{calc\_joint\_log\_pdf}, but adapted to our 
+% higher-dimensional feature matrix $\Phi_{N \times M}$ and financial target $y_t$.
+% Specifically, we will:
+% \begin{itemize}
+%     \item Represent the parameter vector as 
+%     $z_D = [w_1, \dots, w_M, v_1, \dots, v_M]^\top$.
+%     \item Reuse the CP3-style function \texttt{unpack\_mean\_N\_and\_stddev\_N} to map 
+%     $z_D$ and $\Phi_{N \times M}$ to the Gaussian likelihood parameters 
+%     $(\mu_N, \sigma_N)$ using a linear mean and a softplus-transformed variance.
+%     \item Implement Gaussian priors on $\mathbf{w}$ and $\mathbf{v}$ as in CP3 
+%     (bias term with a nonzero prior mean, remaining coefficients centered at zero).:contentReference[oaicite:2]{index=2}
+% \end{itemize}
+% The likelihood and priors will be coded using \texttt{scipy.stats.norm.logpdf} 
+% for numerical stability.
+
+% \paragraph{Posterior sampling via MCMC.}
+% For posterior inference, we will reuse the \texttt{RandomWalkSampler} class from CP3, 
+% which implements Metropolis random-walk MCMC with Gaussian proposals.:contentReference[oaicite:3]{index=3}
+% Our implementation will:
+% \begin{itemize}
+%     \item Construct a list of proposal standard deviation vectors, where each proposal 
+%     perturbs one coordinate of $z_D$ at a time (as in CP3), enabling reasonable 
+%     acceptance rates in high dimensions.:contentReference[oaicite:4]{index=4}
+%     \item Initialize $z_D$ using a ridge-regression estimate for $\mathbf{w}$ and 
+%     a simple variance-based initialization for $\mathbf{v}$, then add small Gaussian 
+%     noise, mirroring the CP3 initialization strategy.:contentReference[oaicite:5]{index=5}
+%     \item Run the sampler for $B$ burn-in iterations and keep $S$ posterior samples 
+%     for downstream posterior predictive evaluation.
+% \end{itemize}
+
+% \paragraph{Posterior predictive evaluation.}
+% We will adapt the CP3 \texttt{calc\_score} function to compute the average log 
+% posterior predictive density on our validation and test sets, using Monte Carlo 
+% integration over the posterior samples $\{z^{(s)}\}_{s=1}^S$.:contentReference[oaicite:6]{index=6}
+% For each held-out example, we will:
+% \begin{enumerate}
+%     \item Compute $(\mu^{(s)}_r, \sigma^{(s)}_r)$ for each posterior sample $z^{(s)}$.
+%     \item Evaluate $\log p(y_r \mid z^{(s)}, x_r)$ using the Gaussian likelihood.
+%     \item Aggregate across samples using \texttt{scipy.special.logsumexp} to obtain a 
+%     numerically stable estimate of the log marginal predictive density.
+% \end{enumerate}
+% We will also compute MSE between the posterior predictive means and observed returns 
+% to provide a more interpretable error metric alongside log likelihood.
+
+% \paragraph{Software stack.}
+% All code will be written in Python, using \texttt{NumPy} for array operations, 
+% \texttt{pandas} for data handling, \texttt{SciPy} for probability distributions 
+% and special functions, and \texttt{scikit-learn} for preprocessing utilities 
+% (e.g., standardization). The MCMC engine (\texttt{RandomWalkSampler}) and 
+% PPE utilities (\texttt{calc\_joint\_log\_pdf}, \texttt{calc\_score}, 
+% \texttt{unpack\_mean\_N\_and\_stddev\_N}, \texttt{softplus}) will be either 
+% directly reused or lightly adapted from the CP3 codebase provided in class.
+
+
+\section{Upgraded Method: Hidden Markov Model}
+
+We upgrade the baseline by implementing a Hidden Markov Model (HMM), which allows for distinction between different market states or regimes depending on bearish or bullish market conditions. Unlike the PPE, which treats all observations as arising from a single state, the HMM can capture regime changes that characterize financial markets.
+
+The estimation objective is to determine whether transition probabilities between different states can be predicted at statistically significant levels, which would suggest the market can be timed by investors. We plan on using the Metropolis Hastings algorithm as it allows for asymmetric data using this algorithm:\\
+\begin{itemize}
+\item Initialize $z_1 \in \Omega$
+
+\item $z'\sim Q(\cdot | z_t)$
+
+\item $u \sim Unif([0,1])$
+
+\[
+        z_{t+1} = \begin{cases}
+        z' \;\;\;\;\;\;\;\; \text{if }, u < \frac{\tilde{p}(z')}{\tilde{p}(z')}\frac{Q(z_t|z')}{Q(z'|z_t)} \\
+        z_t \;\;\;\;\;\;\;\; \text{otherwise}
+    \end{cases}
+\]
+\item
+return $[z_1, z_2, ..., z_{S-1}]$
+\end{itemize}
+which we iterate for $t = 1, 2, ..., N-1$ samples.
+
+
+We hypothesize that compared to the Posterior Predictive approach, the Hidden Markov Model should improve predictions of excess returns, especially during periods when market behavior changes. 
+
+\subsection{Implementation Plan for Hidden Markov Model}
+To implement the HMM upgrade, we will extend our baseline probabilistic regression model by introducing a discrete latent state $z_t \in \{1,\dots,K\}$ for each time step, representing unobserved market regimes such as bull or bear conditions. 
+
+Conditioned on $z_t$, the return model remains Gaussian but with regime-specific means and variances. We will use Metropolis–Hastings MCMC to sample the latent state sequence and model parameters jointly, adapting the CP3 random-walk proposal structure so that each update perturbs either a transition probability, a regime-specific regression weight, or a variance parameter. 
+
+At each iteration, we compute the acceptance ratio from the unnormalized joint density over hidden states, transition matrices, and emission parameters. After burn-in, posterior samples are used to construct the posterior predictive distribution by marginalizing over both latent states and model parameters. 
+
+This implementation requires writing custom code for forward–backward likelihood evaluation, transition matrix updates, and MH acceptance rules, while reusing CP3 utilities for Gaussian likelihood evaluation and softplus variance transforms. 
+
+For the HMM, we tune only the most influential hyperparameters: the number of latent states $K$, the strength of the Dirichlet prior on the transition matrix, the proposal step sizes for Metropolis–Hastings, and the burn-in/sample sizes used for MCMC. Each setting is selected by maximizing validation posterior predictive log-likelihood, while proposal scales are adjusted to maintain reasonable MCMC acceptance rates.
+
+
+\section{Upgraded Method: Moving Window}
+For a given window, we define the parameter $\phi_t$ with $t$ features such as mean, standard deviation, max, min, last value, number of observations, and if the last value is missing which are computed using the last W observations i.e. the window length.
+We hypothesize that compared to slicing the data, using a window approach with the new defined features should improve accuracy on our dataset, especially when many time points are missing values, because of increased heterogeneity by utilizing all time points. Our key hyper-parameters include window length and the features we decide to include.
+
+\subsection{Implementation Plan for Moving Window}
+For the moving window upgrade, we will transform the original 98-dimensional feature vector into $\phi_t$ using the last $W$ observations. For each feature, we include stats such as the mean, standard deviation, min, max, last observed value, total number of non-missing entries, and a binary indicator for whether the final value in the window is missing. This is implemented in Python using \texttt{pandas} rolling-window operations with time-order preserved. The transformed feature vector $\phi_t$ is then passed directly into the same posterior predictive regression model used in the baseline. Because this method relies solely on deterministic feature construction, no changes to the underlying likelihood, prior, or estimator code are required. All existing CP2/CP3 probabilistic regression components posterior inference, predictive variance calculation, and log-likelihood scoring, can therefore be reused unchanged, with the windowed representation serving as the only modification to the input space.
+
+\section{Timeline}
+
+Table~\ref{tab:timeline} outlines the remaining milestones for completing our project. 
+The schedule is structured to ensure steady progress and timely completion before the 
+final deadline of December 18.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Milestone} & \textbf{Target Completion Date} \\
+\midrule
+Finalize dataset pre-processing (slicing + cleaning) & Dec 6 \\
+Implement baseline posterior predictive model & Dec 8 \\
+Evaluate baseline performance (MSE, log-likelihood) & Dec 9 \\
+Implement Hidden Markov Model upgrade & Dec 11 \\
+Run experiments comparing PPE vs.\ HMM & Dec 12 \\
+Implement moving-window feature upgrade & Dec 14 \\
+Run full tests across all methods & Dec 15 \\
+Draft results, discussion, and figures & Dec 16 \\
+Finalize paper & Dec 18 \\
+\bottomrule
+\end{tabular}
+\caption{Project timeline and planned completion dates.}
+\label{tab:timeline}
+\end{table}
+
+\section{Question}
+
+\begin{enumerate}
+    \item Question on Slicing:
+    Our dataset contains substantial missingness in early historical periods, and our initial 
+    preprocessing step removes these rows entirely (slicing).  
+    Is this an acceptable approach for the project, or should we instead prioritize imputation or 
+    window based strategies even if the early data are extremely sparse?  
+    In other words, how aggressive is it reasonable to be when discarding data in a time-series setting?
+\end{enumerate}
+
+
+\end{document}
